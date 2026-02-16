@@ -1,0 +1,1045 @@
+#!/bin/bash
+
+# Hospital Infrastructure Monitoring Script
+# Author: IT Department - Nakasero Hospital
+# Description: Monitors ALL hospital infrastructure including ALL VMs
+
+# ==============================================
+# COMPREHENSIVE INFRASTRUCTURE LIST
+# ==============================================
+
+# CRITICAL INFRASTRUCTURE HOSTS (Physical/Virtual Hosts)
+INFRASTRUCTURE_HOSTS=(
+    # Storage
+    "EMC Storage Array:192.168.10.150"
+    
+    # Virtualization Hosts
+    "ESXi Host 1 (NHLVMWAREHOST1):192.168.10.54"
+    "ESXi Host 2 (NHLVMWAREHOST2):192.168.10.80"
+    "vSphere Management:192.168.10.88"
+    "Hyper-V Host 1 (NHL-PACS):192.168.10.51"
+    "Hyper-V Host 2 (NHL-SERVER1):192.168.10.56"
+    
+    # Backup Servers
+    "Backup Server 1 (NHL-STAGE):192.168.10.71"
+    "Backup Server 2 (FORMER-MYQ):10.4.3.88"
+    "Backup Server 3 (VEEAMHYPERV-BCKP):10.4.1.79"
+    "New LabGuru Server (NEW LABGURU):192.168.10.84"
+    
+    # Application Servers
+    "Old LabGuru Server:192.168.10.83"
+    "Audit-HHI Server:192.168.10.53"
+    
+    # Domain Controllers
+    "Primary DC (NHLDC):192.168.10.16"
+    "Secondary DC (NHLDC1):192.168.10.17"
+    
+    # Print & Queue Systems
+    "MYQ Print Server:10.4.0.22"
+    "Q-SYS PEAD Server:10.4.3.41"
+    "Q-SYS Insurance Server:10.4.2.92"
+    "Q-SYS Main Reception:10.4.3.40"
+    
+    # Medical Systems
+    "MedSynaptic Dicom Receiver:192.168.100.7"
+    "Cardiac Center Laptop:10.4.3.47"
+)
+
+# ESXi HOST 1 VMs (Running on 192.168.10.54)
+ESXI_HOST1_VMS=(
+    "NHL-DYNAMICS365 (ESXi1):192.168.10.78"
+    "NHL_HMIS_APP (ESXi1):192.168.10.61"
+    "NHL_HMIS_DB (ESXi1):192.168.10.60"
+    "PACS AIO - IP1 (ESXi1):192.168.10.107"
+    "PACS AIO - IP2 (ESXi1):192.168.10.131"
+    "RISINTPROD (ESXi1):192.168.10.108"
+)
+
+# ESXi HOST 2 VMs (Running on 192.168.10.80)
+ESXI_HOST2_VMS=(
+    "NHL-HQ (ESXi2):192.168.10.100"
+    "NHL_CAFEAPP (ESXi2):192.168.10.92"
+    "WIFI Server (ESXi2):10.4.0.100"
+    "NHL-RIS-AIO (ESXi2):192.168.10.104"
+    "PACS StorageVM (ESXi2):192.168.10.183"
+    "NHLPACS3D (ESXi2):192.168.10.95"
+)
+
+# HYPER-V HOST 1 VMs (Running on 192.168.10.51 - Running state only)
+HYPERV_HOST1_VMS=(
+    "BOOKING MGMT SYSTEM (HV1):192.168.10.82"
+    "KRANIUM MANAGEMENT (HV1):192.168.10.64"
+    "NHL ZABBIX SERVER (HV1):192.168.10.223"
+    "NHL-HMIS-DB-RPT (HV1):192.168.10.62"
+    "NHL-MED360 (HV1):192.168.10.25"
+    "QLIK (HV1):192.168.10.87"
+    "Resourceline (HV1):192.168.10.58"
+    "NHLNAV (HV1):192.168.10.21"
+    "NHLSQL (HV1):192.168.10.20"
+    "SMART LINUX SERVER (HV1):192.168.10.76"  # Missing IP
+    "SYDNEY UBUNTU LINUX VM (HV1):192.168.10.99"  # Missing IP
+)
+
+# HYPER-V HOST 2 VMs (Running on 192.168.10.56 - Running state only)
+HYPERV_HOST2_VMS=(
+    "DOC MGMT WIN 11 (HV2):192.168.10.249"
+    "FujiMonitoring (HV2):192.168.10.109"
+    "ITSupportVm (HV2):192.168.10.50"
+    "NHL SMART-DB REPLICA (HV2):192.168.10.177"
+    "NHL-UAT-APP-DB (HV2):192.168.10.63"
+    "PHONE DIRECTORY VM (HV2):192.168.10.90"
+    "sydneyVM (PACS_AIO) (HV2):192.168.10.181"
+    "ZABBIX (HV2):192.168.10.??"  # Note: Off state, but included for completeness
+)
+
+# Combine all hosts
+ALL_HOSTS=(
+    "${INFRASTRUCTURE_HOSTS[@]}"
+    "${ESXI_HOST1_VMS[@]}"
+    "${ESXI_HOST2_VMS[@]}"
+    "${HYPERV_HOST1_VMS[@]}"
+    "${HYPERV_HOST2_VMS[@]}"
+)
+
+# Critical hosts that get individual alerts (infrastructure + key VMs)
+CRITICAL_HOSTS=(
+    "192.168.10.150"  # EMC Storage
+    "192.168.10.54"   # ESXi Host 1
+    "192.168.10.80"   # ESXi Host 2
+    "192.168.10.88"   # vSphere
+    "192.168.10.16"   # Primary DC
+    "192.168.10.17"   # Secondary DC
+    "192.168.10.71"   # Backup Server 1
+    "192.168.10.84"   # NEW LABGURU
+    "192.168.10.83"   # Old LabGuru
+    "192.168.10.61"   # NHL_HMIS_APP
+    "192.168.10.60"   # NHL_HMIS_DB
+    "192.168.10.107"  # PACS AIO
+    "192.168.10.108"  # RISINTPROD
+    "192.168.10.183"  # PACS StorageVM
+    "192.168.10.95"   # NHLPACS3D
+    "192.168.10.62"   # NHL-HMIS-DB-RPT
+    "192.168.10.109"  # FujiMonitoring
+    "10.4.0.22"       # MYQ Print Server
+)
+
+# Categorize hosts for reporting
+declare -A HOST_CATEGORIES=(
+    # Storage
+    ["192.168.10.150"]="Storage"
+    
+    # Virtualization Hosts
+    ["192.168.10.54"]="Virtualization"
+    ["192.168.10.80"]="Virtualization"
+    ["192.168.10.88"]="Virtualization"
+    ["192.168.10.51"]="Virtualization"
+    ["192.168.10.56"]="Virtualization"
+    
+    # Backup Servers
+    ["192.168.10.71"]="Backup"
+    ["10.4.3.88"]="Backup"
+    ["10.4.1.79"]="Backup"
+    ["192.168.10.84"]="Backup"
+    
+    # Application Servers
+    ["192.168.10.83"]="Application"
+    ["192.168.10.53"]="Application"
+    ["192.168.10.78"]="Application"
+    ["192.168.10.61"]="Application"
+    ["192.168.10.60"]="Application"
+    ["192.168.10.108"]="Application"
+    ["192.168.10.100"]="Application"
+    ["192.168.10.92"]="Application"
+    ["192.168.10.104"]="Application"
+    ["192.168.10.95"]="Application"
+    ["192.168.10.82"]="Application"
+    ["192.168.10.64"]="Application"
+    ["192.168.10.62"]="Application"
+    ["192.168.10.25"]="Application"
+    ["192.168.10.87"]="Application"
+    ["192.168.10.58"]="Application"
+    ["192.168.10.21"]="Application"
+    ["192.168.10.20"]="Application"
+    ["192.168.10.249"]="Application"
+    ["192.168.10.177"]="Application"
+    ["192.168.10.63"]="Application"
+    ["192.168.10.90"]="Application"
+    
+    # Domain Controllers
+    ["192.168.10.16"]="Infrastructure"
+    ["192.168.10.17"]="Infrastructure"
+    
+    # Medical Systems
+    ["192.168.10.107"]="Medical"
+    ["192.168.10.131"]="Medical"
+    ["192.168.10.183"]="Medical"
+    ["192.168.10.109"]="Medical"
+    ["192.168.10.181"]="Medical"
+    ["192.168.100.7"]="Medical"
+    
+    # Network Infrastructure
+    ["10.4.0.100"]="Network"
+    
+    # Monitoring
+    ["192.168.10.223"]="Monitoring"
+    ["192.168.10.50"]="Monitoring"
+    
+    # Print & Queue
+    ["10.4.0.22"]="Print"
+    ["10.4.3.41"]="QueueSystem"
+    ["10.4.2.92"]="QueueSystem"
+    ["10.4.3.40"]="QueueSystem"
+    ["10.4.3.47"]="Medical"
+)
+
+# ==============================================
+# CONFIGURATION
+# ==============================================
+
+# Email Configuration
+SMTP_SERVER="smtppro.zoho.com"
+SMTP_PORT="465"
+EMAIL_FROM="isaac.nambafu@nakaserohospital.com"
+EMAIL_USER="isaac.nambafu@nakaserohospital.com"
+EMAIL_PASS="MAzdaxxxx5555"  # UPDATE WITH ACTUAL PASSWORD
+
+RECIPIENTS=(
+    "isaacnbfu@gmail.com"
+    "gerald.balitwawula@nhl.co.ug"
+    "nhlitinternal@nakaserohospital.com"
+    "sydney.nahamya@nakaserohospital.com"
+)
+
+# Working directory
+WORK_DIR="/opt/hospital-monitor"
+LOG_FILE="$WORK_DIR/monitor.log"
+STATE_FILE="$WORK_DIR/last_state.txt"
+HISTORY_FILE="$WORK_DIR/history.log"
+INITIAL_SENT_FILE="$WORK_DIR/initial_sent.flag"
+STATS_FILE="$WORK_DIR/statistics.json"
+HOST_COUNT_FILE="$WORK_DIR/host_count.txt"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+NC='\033[0m'
+
+# Create working directory
+mkdir -p "$WORK_DIR"
+touch "$LOG_FILE" "$HISTORY_FILE"
+
+# ==============================================
+# FUNCTIONS
+# ==============================================
+
+# Function to log messages
+log_message() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+log_history() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$HISTORY_FILE"
+}
+
+# Function to get host name by IP
+get_host_name() {
+    local ip="$1"
+    for host in "${ALL_HOSTS[@]}"; do
+        if [[ "$host" == *":$ip" ]]; then
+            echo "${host%:*}"
+            return 0
+        fi
+    done
+    echo "Unknown Host ($ip)"
+}
+
+# Function to get host category
+get_host_category() {
+    local ip="$1"
+    echo "${HOST_CATEGORIES[$ip]:-Uncategorized}"
+}
+
+# Function to check if host is critical
+is_critical_host() {
+    local ip="$1"
+    for critical_ip in "${CRITICAL_HOSTS[@]}"; do
+        if [ "$ip" = "$critical_ip" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Function to check host connectivity with retry
+check_host() {
+    local ip="$1"
+    local retries=2
+    local timeout=2
+    
+    # Skip hosts with missing IPs
+    if [[ "$ip" == *"?"* ]] || [ -z "$ip" ]; then
+        echo "skip"
+        return 0
+    fi
+    
+    for ((i=1; i<=retries; i++)); do
+        if ping -c 1 -W $timeout "$ip" > /dev/null 2>&1; then
+            echo "up"
+            return 0
+        fi
+        sleep 0.5
+    done
+    
+    echo "down"
+}
+
+# Function to install dependencies
+install_dependencies() {
+    log_message "Checking dependencies..."
+    
+    if ! command -v mutt &> /dev/null; then
+        echo "Installing mutt for email notifications..."
+        if command -v apt-get &> /dev/null; then
+            apt-get update && apt-get install -y mutt jq
+        elif command -v yum &> /dev/null; then
+            yum install -y mutt jq
+        fi
+    fi
+    
+    log_message "Dependencies check completed"
+}
+
+# Function to setup email
+setup_email_config() {
+    cat > ~/.muttrc << EOF
+set from = "$EMAIL_FROM"
+set realname = "Hospital Infrastructure Monitor"
+set smtp_url = "smtps://$EMAIL_USER:$EMAIL_PASS@$SMTP_SERVER:$SMTP_PORT"
+set smtp_pass = "$EMAIL_PASS"
+set content_type = "text/html"
+EOF
+    
+    chmod 600 ~/.muttrc
+    log_message "Email configuration created"
+}
+
+# Function to send email
+send_email() {
+    local subject="$1"
+    local body="$2"
+    local is_initial="$3"
+    
+    # Format recipients
+    local to_emails=$(printf ",%s" "${RECIPIENTS[@]}")
+    to_emails=${to_emails:1}
+    
+    if [ "$is_initial" = "true" ]; then
+        # Create temp file for initial email
+        local temp_email="/tmp/initial_email_$(date +%s).html"
+        echo "$body" > "$temp_email"
+        
+        local email_sent=false
+        
+        if command -v mutt &> /dev/null; then
+            if mutt -e "set content_type=text/html" -s "$subject" "$to_emails" < "$temp_email" 2>> "$LOG_FILE"; then
+                email_sent=true
+            fi
+        fi
+        
+        rm -f "$temp_email"
+        
+        if [ "$email_sent" = true ]; then
+            return 0
+        else
+            return 1
+        fi
+    else
+        # For alert emails
+        if command -v mutt &> /dev/null; then
+            echo "$body" | mutt -e "set content_type=text/html" -s "$subject" "$to_emails" 2>> "$LOG_FILE"
+            return $?
+        else
+            log_message "ERROR: mutt not available"
+            return 1
+        fi
+    fi
+}
+
+# Function to display comprehensive dashboard
+show_dashboard() {
+    clear
+    
+    # Header
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║                    NAKASERO HOSPITAL INFRASTRUCTURE MONITOR                     ║${NC}"
+    echo -e "${CYAN}║                    $(date '+%Y-%m-%d %H:%M:%S')                                   ║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    # Overall Statistics
+    local total_hosts=0
+    local up_hosts=0
+    local down_hosts=0
+    local skipped_hosts=0
+    
+    declare -A category_up
+    declare -A category_total
+    
+    # First pass: collect data
+    for host in "${ALL_HOSTS[@]}"; do
+        local ip="${host#*:}"
+        
+        # Skip hosts with missing IPs
+        if [[ "$ip" == *"?"* ]] || [ -z "$ip" ]; then
+            ((skipped_hosts++))
+            continue
+        fi
+        
+        ((total_hosts++))
+        
+        local category=$(get_host_category "$ip")
+        local status=$(check_host "$ip")
+        
+        ((category_total[$category]++))
+        if [ "$status" = "up" ]; then
+            ((up_hosts++))
+            ((category_up[$category]++))
+        elif [ "$status" = "down" ]; then
+            ((down_hosts++))
+        fi
+    done
+    
+    # Display summary
+    echo -e "${WHITE}📊 OVERALL SUMMARY:${NC}"
+    echo -e "${BLUE}──────────────────────────────────────────────────────────────────────────────────${NC}"
+    printf "  ${GREEN}✅ Online: %-4d${NC} | ${RED}❌ Offline: %-4d${NC} | ${YELLOW}📋 Total: %-4d${NC} | ${MAGENTA}⏭️  Skipped: %-4d${NC}\n" \
+        "$up_hosts" "$down_hosts" "$total_hosts" "$skipped_hosts"
+    
+    if [ $total_hosts -gt 0 ]; then
+        local uptime_percent=$((up_hosts * 100 / total_hosts))
+        echo -e "  ${CYAN}📈 Uptime: $uptime_percent%${NC}"
+    fi
+    echo ""
+    
+    # Category Breakdown
+    echo -e "${WHITE}🏷️  STATUS BY CATEGORY:${NC}"
+    echo -e "${BLUE}──────────────────────────────────────────────────────────────────────────────────${NC}"
+    
+    for category in "${!category_total[@]}"; do
+        local up_count=${category_up[$category]:-0}
+        local total_count=${category_total[$category]}
+        local percent=$((up_count * 100 / total_count))
+        
+        # Progress bar
+        local bar_length=20
+        local filled=$((percent * bar_length / 100))
+        local bar="["
+        for ((i=0; i<bar_length; i++)); do
+            if [ $i -lt $filled ]; then
+                if [ $percent -ge 90 ]; then
+                    bar+="${GREEN}■${NC}"
+                elif [ $percent -ge 70 ]; then
+                    bar+="${YELLOW}■${NC}"
+                else
+                    bar+="${RED}■${NC}"
+                fi
+            else
+                bar+=" "
+            fi
+        done
+        bar+="]"
+        
+        printf "  %-20s %-30s %3d%%\n" "$category:" "$bar" "$percent"
+    done
+    echo ""
+    
+    # Recent Changes
+    if [ -f "$WORK_DIR/recent_changes.tmp" ] && [ -s "$WORK_DIR/recent_changes.tmp" ]; then
+        echo -e "${WHITE}🔄 RECENT CHANGES (Last 10 minutes):${NC}"
+        echo -e "${BLUE}──────────────────────────────────────────────────────────────────────────────────${NC}"
+        tail -5 "$WORK_DIR/recent_changes.tmp" | while read line; do
+            echo "  $line"
+        done
+        echo ""
+    fi
+    
+    # Critical Systems Status
+    echo -e "${WHITE}🚨 CRITICAL SYSTEMS STATUS:${NC}"
+    echo -e "${BLUE}──────────────────────────────────────────────────────────────────────────────────${NC}"
+    
+    local critical_online=0
+    local critical_total=0
+    
+    for ip in "${CRITICAL_HOSTS[@]}"; do
+        ((critical_total++))
+        local status=$(check_host "$ip")
+        local name=$(get_host_name "$ip")
+        
+        if [ "$status" = "up" ]; then
+            ((critical_online++))
+            echo -e "  ${GREEN}✓ ${name:0:40}${NC}"
+        else
+            echo -e "  ${RED}✗ ${name:0:40}${NC}"
+        fi
+    done
+    
+    if [ $critical_total -gt 0 ]; then
+        local critical_percent=$((critical_online * 100 / critical_total))
+        echo -e "\n  ${CYAN}📊 Critical Systems Health: $critical_percent% ($critical_online/$critical_total)${NC}"
+    fi
+    echo ""
+    
+    # Footer
+    echo -e "${MAGENTA}Monitoring Host: $(hostname) | Next check: 60s | Press Ctrl+C to stop${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════════════════════════${NC}"
+}
+
+# Function to send individual host alert
+send_host_alert() {
+    local host_name="$1"
+    local ip="$2"
+    local status="$3"  # "down" or "up"
+    local category=$(get_host_category "$ip")
+    local is_critical=""
+    
+    if is_critical_host "$ip"; then
+        is_critical=" (CRITICAL)"
+    fi
+    
+    local subject
+    local urgency=""
+    
+    if [ "$status" = "down" ]; then
+        if is_critical_host "$ip"; then
+            subject="🚨🔥 CRITICAL ALERT: $host_name $is_critical - OFFLINE"
+            urgency="<div style='background-color: #dc3545; color: white; padding: 10px; border-radius: 5px;'>
+                    <strong>URGENT ATTENTION REQUIRED:</strong> This is a CRITICAL system affecting hospital operations.
+                  </div>"
+        else
+            subject="⚠️ ALERT: $host_name - OFFLINE"
+            urgency=""
+        fi
+        
+        body="<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .alert-header { background-color: #dc3545; color: white; padding: 20px; border-radius: 5px 5px 0 0; }
+        .info-box { padding: 20px; border: 2px solid #dc3545; margin: 0; border-radius: 0 0 5px 5px; }
+        .details { background-color: #f8f9fa; padding: 15px; margin: 15px 0; border-left: 4px solid #6c757d; }
+        .actions { background-color: #fff3cd; padding: 15px; border: 1px solid #ffc107; }
+    </style>
+</head>
+<body>
+    <div class='alert-header'>
+        <h2>🔴 HOST OFFLINE DETECTED</h2>
+        <h3>$host_name</h3>
+    </div>
+    
+    <div class='info-box'>
+        $urgency
+        <h3>📋 Host Details:</h3>
+        <table border='0' cellpadding='8'>
+            <tr><td><strong>Host Name:</strong></td><td>$host_name</td></tr>
+            <tr><td><strong>IP Address:</strong></td><td>$ip</td></tr>
+            <tr><td><strong>Category:</strong></td><td>$category</td></tr>
+            <tr><td><strong>Status:</strong></td><td><span style='color: #dc3545; font-weight: bold;'>OFFLINE</span></td></tr>
+            <tr><td><strong>Detection Time:</strong></td><td>$(date '+%Y-%m-%d %H:%M:%S')</td></tr>
+            <tr><td><strong>Monitoring Host:</strong></td><td>$(hostname)</td></tr>
+        </table>
+        
+        <div class='details'>
+            <h4>🔍 Immediate Troubleshooting:</h4>
+            <ol>
+                <li>Check physical connectivity and power to the host</li>
+                <li>Verify network switch port status</li>
+                <li>Check if host is responsive via console/ILO</li>
+                <li>Review recent changes or maintenance</li>
+                <li>Check for alerts in virtualization management</li>
+            </ol>
+        </div>
+        
+        <div class='actions'>
+            <h4>🚀 Required Actions:</h4>
+            <ul>
+                <li>Document incident in IT service log</li>
+                <li>Check dependent services and systems</li>
+                <li>Initiate recovery procedures</li>
+                <li>Notify relevant department if service affected</li>
+            </ul>
+        </div>
+    </div>
+    
+    <p style='color: #6c757d; font-size: 11px; margin-top: 20px;'>
+        <em>Automated alert from Nakasero Hospital Infrastructure Monitoring System</em>
+    </p>
+</body>
+</html>"
+    else
+        # Recovery notification
+        subject="✅ RECOVERY: $host_name - BACK ONLINE"
+        
+        body="<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .recovery-header { background-color: #28a745; color: white; padding: 20px; border-radius: 5px 5px 0 0; }
+        .info-box { padding: 20px; border: 2px solid #28a745; margin: 0; border-radius: 0 0 5px 5px; }
+        .verification { background-color: #d4edda; padding: 15px; margin: 15px 0; }
+    </style>
+</head>
+<body>
+    <div class='recovery-header'>
+        <h2>✅ HOST RECOVERY DETECTED</h2>
+        <h3>$host_name</h3>
+    </div>
+    
+    <div class='info-box'>
+        <h3>📋 Recovery Details:</h3>
+        <table border='0' cellpadding='8'>
+            <tr><td><strong>Host Name:</strong></td><td>$host_name</td></tr>
+            <tr><td><strong>IP Address:</strong></td><td>$ip</td></tr>
+            <tr><td><strong>Category:</strong></td><td>$category</td></tr>
+            <tr><td><strong>Status:</strong></td><td><span style='color: #28a745; font-weight: bold;'>ONLINE</span></td></tr>
+            <tr><td><strong>Recovery Time:</strong></td><td>$(date '+%Y-%m-%d %H:%M:%S')</td></tr>
+            <tr><td><strong>Downtime Duration:</strong></td><td>Calculating...</td></tr>
+        </table>
+        
+        <div class='verification'>
+            <h4>🔍 Post-Recovery Verification:</h4>
+            <ol>
+                <li>Verify all services on the host are running</li>
+                <li>Check system logs for error messages</li>
+                <li>Monitor system stability for next 30 minutes</li>
+                <li>Update incident documentation with recovery details</li>
+                <li>Communicate recovery to affected departments</li>
+            </ol>
+        </div>
+    </div>
+    
+    <p style='color: #6c757d; font-size: 11px; margin-top: 20px;'>
+        <em>Automated recovery notification from Nakasero Hospital Infrastructure Monitoring System</em>
+    </p>
+</body>
+</html>"
+    fi
+    
+    if send_email "$subject" "$body" "false"; then
+        log_message "Alert email sent for $host_name ($ip) - Status: $status"
+        log_history "STATE_CHANGE: $host_name ($ip) → $status"
+        echo "[$(date '+%H:%M:%S')] $host_name ($category) → $status" >> "$WORK_DIR/recent_changes.tmp"
+        
+        # Keep only last 20 changes
+        tail -20 "$WORK_DIR/recent_changes.tmp" > "$WORK_DIR/recent_changes.tmp.new"
+        mv "$WORK_DIR/recent_changes.tmp.new" "$WORK_DIR/recent_changes.tmp"
+        
+        return 0
+    else
+        log_message "Failed to send alert for $host_name ($ip)"
+        return 1
+    fi
+}
+
+# Function to send batch alert for multiple hosts
+send_batch_alert() {
+    local down_hosts_list="$1"
+    local recovered_hosts_list="$2"
+    
+    if [ -z "$down_hosts_list" ] && [ -z "$recovered_hosts_list" ]; then
+        return 0
+    fi
+    
+    local subject=""
+    local body=""
+    
+    if [ -n "$down_hosts_list" ] && [ -n "$recovered_hosts_list" ]; then
+        subject="🔄 MIXED STATUS UPDATE: Multiple Hosts Changed State"
+    elif [ -n "$down_hosts_list" ]; then
+        subject="⚠️ MULTIPLE HOSTS OFFLINE"
+    else
+        subject="✅ MULTIPLE HOSTS RECOVERED"
+    fi
+    
+    body="<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .header { padding: 20px; color: white; border-radius: 5px 5px 0 0; }
+        .mixed { background-color: #ffc107; color: black; }
+        .down { background-color: #dc3545; }
+        .recovered { background-color: #28a745; }
+        .content { padding: 20px; border: 1px solid #dee2e6; border-radius: 0 0 5px 5px; }
+        .section { margin: 15px 0; padding: 15px; border-radius: 5px; }
+        .down-section { background-color: #f8d7da; border: 1px solid #f5c6cb; }
+        .recovered-section { background-color: #d4edda; border: 1px solid #c3e6cb; }
+        .summary { background-color: #e9ecef; padding: 15px; border-radius: 5px; }
+    </style>
+</head>
+<body>"
+    
+    if [ -n "$down_hosts_list" ] && [ -n "$recovered_hosts_list" ]; then
+        body+="<div class='header mixed'><h2>🔄 MULTIPLE STATUS CHANGES DETECTED</h2></div>"
+    elif [ -n "$down_hosts_list" ]; then
+        body+="<div class='header down'><h2>⚠️ MULTIPLE HOSTS OFFLINE</h2></div>"
+    else
+        body+="<div class='header recovered'><h2>✅ MULTIPLE HOSTS RECOVERED</h2></div>"
+    fi
+    
+    body+="<div class='content'>
+            <p><strong>Detection Time:</strong> $(date '+%Y-%m-%d %H:%M:%S')</p>"
+    
+    if [ -n "$down_hosts_list" ]; then
+        body+="<div class='section down-section'>
+                <h3>🔴 Systems Currently OFFLINE:</h3>
+                $down_hosts_list
+              </div>"
+    fi
+    
+    if [ -n "$recovered_hosts_list" ]; then
+        body+="<div class='section recovered-section'>
+                <h3>🟢 Systems That Recovered:</h3>
+                $recovered_hosts_list
+              </div>"
+    fi
+    
+    body+="<div class='summary'>
+            <h4>📊 Monitoring Summary:</h4>
+            <table border='0' cellpadding='8'>
+                <tr><td><strong>Total Monitored Hosts:</strong></td><td>${#ALL_HOSTS[@]}</td></tr>
+                <tr><td><strong>Critical Systems:</strong></td><td>${#CRITICAL_HOSTS[@]}</td></tr>
+                <tr><td><strong>DNS Server:</strong></td><td>192.168.10.16</td></tr>
+                <tr><td><strong>Gateway:</strong></td><td>10.4.0.1</td></tr>
+                <tr><td><strong>Monitoring Server:</strong></td><td>$(hostname)</td></tr>
+            </table>
+          </div>"
+    
+    body+="<p style='color: #6c757d; font-size: 11px; margin-top: 20px;'>
+            <em>Automated alert from Nakasero Hospital Infrastructure Monitoring System</em>
+          </p>
+        </div>
+</body>
+</html>"
+    
+    send_email "$subject" "$body" "false"
+}
+
+# Function to send initial notification
+send_initial_notification() {
+    if [ -f "$INITIAL_SENT_FILE" ]; then
+        log_message "Initial notification already sent"
+        return 0
+    fi
+    
+    log_message "Sending initial notification for ${#ALL_HOSTS[@]} hosts..."
+    
+    local subject="🏥 COMPLETE INFRASTRUCTURE MONITORING: ${#ALL_HOSTS[@]} Systems Activated"
+    
+    # Count by category
+    declare -A category_count
+    for host in "${ALL_HOSTS[@]}"; do
+        local ip="${host#*:}"
+        if [[ ! "$ip" == *"?"* ]] && [ -n "$ip" ]; then
+            local category=$(get_host_category "$ip")
+            ((category_count[$category]++))
+        fi
+    done
+    
+    local category_table=""
+    for category in "${!category_count[@]}"; do
+        category_table+="<tr>
+            <td>$category</td>
+            <td>${category_count[$category]}</td>
+        </tr>"
+    done
+    
+    body="<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .header { background-color: #2c3e50; color: white; padding: 25px; border-radius: 5px 5px 0 0; }
+        .content { padding: 25px; }
+        .stats { background-color: #f8f9fa; padding: 20px; border-radius: 5px; margin: 20px 0; }
+        .note { background-color: #fff3cd; padding: 20px; border-left: 4px solid #ffc107; margin: 20px 0; }
+        table { width: 100%; border-collapse: collapse; }
+        th { background-color: #6c757d; color: white; padding: 12px; text-align: left; }
+        td { padding: 10px; border-bottom: 1px solid #dee2e6; }
+    </style>
+</head>
+<body>
+    <div class='header'>
+        <h1>🏥 NAKASERO HOSPITAL</h1>
+        <h2>Complete Infrastructure Monitoring Activated</h2>
+    </div>
+    
+    <div class='content'>
+        <p><strong>Dear IT Team,</strong></p>
+        
+        <p>Comprehensive monitoring has been activated for <strong>${#ALL_HOSTS[@]} systems</strong> across the hospital infrastructure.</p>
+        
+        <div class='stats'>
+            <h3>📊 Monitoring Coverage:</h3>
+            <table>
+                <tr>
+                    <th>Category</th>
+                    <th>Number of Systems</th>
+                </tr>
+                $category_table
+                <tr style='font-weight: bold; background-color: #e9ecef;'>
+                    <td>TOTAL</td>
+                    <td>${#ALL_HOSTS[@]}</td>
+                </tr>
+            </table>
+        </div>
+        
+        <h3>🔧 Monitoring Includes:</h3>
+        <ul>
+            <li><strong>Storage Systems:</strong> EMC Storage Array</li>
+            <li><strong>Virtualization Hosts:</strong> ESXi (2), Hyper-V (2), vSphere</li>
+            <li><strong>Backup Servers:</strong> 4 dedicated backup systems</li>
+            <li><strong>Domain Controllers:</strong> Primary & Secondary DCs</li>
+            <li><strong>Application Servers:</strong> 20+ critical applications</li>
+            <li><strong>Medical Systems:</strong> PACS/RIS, Cardiac, Dicom</li>
+            <li><strong>Virtual Machines:</strong> All running VMs from ESXi & Hyper-V</li>
+        </ul>
+        
+        <div class='note'>
+            <h4>🚨 Alerting Policy:</h4>
+            <ul>
+                <li><strong>Critical Systems:</strong> Individual alerts immediately when state changes</li>
+                <li><strong>Other Systems:</strong> Batch alerts for multiple state changes</li>
+                <li><strong>No alerts</strong> for systems staying in their current state</li>
+                <li><strong>Recovery notifications</strong> when systems come back online</li>
+            </ul>
+        </div>
+        
+        <p><strong>Monitoring initiated:</strong> $(date '+%Y-%m-%d %H:%M:%S')</p>
+        <p><strong>Monitoring host:</strong> $(hostname)</p>
+    </div>
+    
+    <div style='margin-top: 30px; padding-top: 15px; border-top: 1px solid #dee2e6; font-size: 11px; color: #6c757d;'>
+        <p><em>Automated message from Nakasero Hospital Infrastructure Monitoring System</em></p>
+    </div>
+</body>
+</html>"
+    
+    if send_email "$subject" "$body" "true"; then
+        touch "$INITIAL_SENT_FILE"
+        log_message "Initial notification sent for ${#ALL_HOSTS[@]} hosts"
+        
+        # Save host count
+        echo "Total Hosts: ${#ALL_HOSTS[@]}" > "$HOST_COUNT_FILE"
+        echo "Critical Hosts: ${#CRITICAL_HOSTS[@]}" >> "$HOST_COUNT_FILE"
+        echo "Infrastructure: ${#INFRASTRUCTURE_HOSTS[@]}" >> "$HOST_COUNT_FILE"
+        echo "ESXi VMs: $((${#ESXI_HOST1_VMS[@]} + ${#ESXI_HOST2_VMS[@]}))" >> "$HOST_COUNT_FILE"
+        echo "Hyper-V VMs: $((${#HYPERV_HOST1_VMS[@]} + ${#HYPERV_HOST2_VMS[@]}))" >> "$HOST_COUNT_FILE"
+        
+        return 0
+    else
+        log_message "ERROR: Failed to send initial notification"
+        return 1
+    fi
+}
+
+# Load previous state
+load_previous_state() {
+    declare -gA PREV_STATE
+    if [ -f "$STATE_FILE" ]; then
+        while IFS=':' read -r ip state; do
+            PREV_STATE["$ip"]="$state"
+        done < "$STATE_FILE"
+    else
+        # Initialize with unknown state
+        for host in "${ALL_HOSTS[@]}"; do
+            local ip="${host#*:}"
+            if [[ ! "$ip" == *"?"* ]] && [ -n "$ip" ]; then
+                PREV_STATE["$ip"]="unknown"
+            fi
+        done
+    fi
+}
+
+# Save current state
+save_current_state() {
+    > "$STATE_FILE"
+    for host in "${ALL_HOSTS[@]}"; do
+        local ip="${host#*:}"
+        if [[ ! "$ip" == *"?"* ]] && [ -n "$ip" ]; then
+            local current_state="${CURRENT_STATE[$ip]:-unknown}"
+            echo "$ip:$current_state" >> "$STATE_FILE"
+        fi
+    done
+}
+
+# Main monitoring function
+monitor_loop() {
+    log_message "Starting monitoring loop for ${#ALL_HOSTS[@]} total hosts"
+    
+    declare -A CURRENT_STATE
+    declare -A LAST_ALERT_TIME
+    
+    # Clear recent changes file
+    > "$WORK_DIR/recent_changes.tmp"
+    
+    local check_interval=60  # seconds
+    
+    while true; do
+        local down_hosts=()
+        local recovered_hosts=()
+        local down_hosts_html=""
+        local recovered_hosts_html=""
+        local current_time=$(date +%s)
+        
+        # Check each host
+        for host in "${ALL_HOSTS[@]}"; do
+            local host_name="${host%:*}"
+            local ip="${host#*:}"
+            
+            # Skip hosts with missing IPs
+            if [[ "$ip" == *"?"* ]] || [ -z "$ip" ]; then
+                continue
+            fi
+            
+            local status=$(check_host "$ip")
+            
+            # Skip if status is "skip"
+            if [ "$status" = "skip" ]; then
+                continue
+            fi
+            
+            CURRENT_STATE["$ip"]="$status"
+            
+            # Check if status changed
+            local prev_status="${PREV_STATE[$ip]}"
+            
+            if [ "$status" != "$prev_status" ]; then
+                # Status changed
+                if [ "$status" = "down" ]; then
+                    down_hosts+=("$host_name ($ip)")
+                    down_hosts_html+="<li><strong>$host_name</strong> ($ip) - $(get_host_category "$ip")</li>"
+                    
+                    # Send individual alert for critical hosts
+                    if is_critical_host "$ip"; then
+                        send_host_alert "$host_name" "$ip" "down"
+                    fi
+                    
+                elif [ "$status" = "up" ] && [ "$prev_status" = "down" ]; then
+                    recovered_hosts+=("$host_name ($ip)")
+                    recovered_hosts_html+="<li><strong>$host_name</strong> ($ip) - $(get_host_category "$ip")</li>"
+                    
+                    # Send individual recovery for critical hosts
+                    if is_critical_host "$ip"; then
+                        send_host_alert "$host_name" "$ip" "up"
+                    fi
+                fi
+                
+                log_message "STATUS_CHANGE: $host_name ($ip) changed from $prev_status to $status"
+                log_history "STATUS_CHANGE: $host_name ($ip) $prev_status → $status"
+            fi
+            
+            # Update previous state
+            PREV_STATE["$ip"]="$status"
+        done
+        
+        # Display dashboard
+        show_dashboard
+        
+        # Send batch alerts for non-critical hosts
+        if [ ${#down_hosts[@]} -gt 0 ] || [ ${#recovered_hosts[@]} -gt 0 ]; then
+            # Filter out critical hosts (they already got individual alerts)
+            local non_critical_down_html=""
+            local non_critical_recovered_html=""
+            local non_critical_down_count=0
+            local non_critical_recovered_count=0
+            
+            for host_entry in "${down_hosts[@]}"; do
+                local ip=$(echo "$host_entry" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
+                if ! is_critical_host "$ip"; then
+                    non_critical_down_html+="<li>$host_entry</li>"
+                    ((non_critical_down_count++))
+                fi
+            done
+            
+            for host_entry in "${recovered_hosts[@]}"; do
+                local ip=$(echo "$host_entry" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
+                if ! is_critical_host "$ip"; then
+                    non_critical_recovered_html+="<li>$host_entry</li>"
+                    ((non_critical_recovered_count++))
+                fi
+            done
+            
+            # Send batch alert if we have non-critical changes
+            if [ $non_critical_down_count -gt 0 ] || [ $non_critical_recovered_count -gt 0 ]; then
+                send_batch_alert "$non_critical_down_html" "$non_critical_recovered_html"
+            fi
+        fi
+        
+        save_current_state
+        
+        # Wait for next check
+        for ((i=check_interval; i>0; i--)); do
+            echo -ne "\r${CYAN}Next check in ${i}s...${NC}     "
+            sleep 1
+        done
+        echo -ne "\r\033[K"  # Clear line
+    done
+}
+
+# Main execution
+main() {
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}                    NAKASERO HOSPITAL INFRASTRUCTURE MONITOR                     ${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════════════════════════════════════════${NC}"
+    
+    # Display host counts
+    echo -e "${WHITE}System Inventory:${NC}"
+    echo -e "  ${GREEN}📊 Total Hosts: ${#ALL_HOSTS[@]}${NC}"
+    echo -e "  ${YELLOW}🏗️  Infrastructure: ${#INFRASTRUCTURE_HOSTS[@]}${NC}"
+    echo -e "  ${BLUE}🖥️  ESXi VMs: $((${#ESXI_HOST1_VMS[@]} + ${#ESXI_HOST2_VMS[@]}))${NC}"
+    echo -e "  ${MAGENTA}💻 Hyper-V VMs: $((${#HYPERV_HOST1_VMS[@]} + ${#HYPERV_HOST2_VMS[@]}))${NC}"
+    echo -e "  ${RED}🚨 Critical Systems: ${#CRITICAL_HOSTS[@]}${NC}"
+    echo ""
+    
+    # Check root
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${YELLOW}Warning: Not running as root. Some features may not work.${NC}"
+        sleep 2
+    fi
+    
+    # Install dependencies
+    install_dependencies
+    
+    # Setup email
+    setup_email_config
+    
+    # Load previous state
+    load_previous_state
+    
+    # Send initial notification
+    echo -e "${YELLOW}Sending initial notification for ${#ALL_HOSTS[@]} systems...${NC}"
+    send_initial_notification
+    
+    # Start monitoring
+    echo -e "${GREEN}Starting continuous monitoring...${NC}"
+    echo -e "${CYAN}Alert Policy:${NC}"
+    echo -e "  • ${RED}Critical systems: Individual alerts${NC}"
+    echo -e "  • ${YELLOW}Other systems: Batch alerts${NC}"
+    echo -e "  • ${GREEN}Only state changes trigger alerts${NC}"
+    echo ""
+    
+    monitor_loop
+}
+
+# Trap for clean exit
+trap 'log_message "Monitoring stopped by user"; echo -e "\n${YELLOW}Monitoring stopped.${NC}"; exit 0' INT TERM
+
+# Run
+main

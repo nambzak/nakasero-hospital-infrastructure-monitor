@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manage Hosts - Nakasero Hospital</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
+    <style>
+        body { background-color: #f8f9fa; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .header { background: linear-gradient(135deg, #2c3e50 0%, #4a6491 100%); color: white; padding: 1.5rem 0; margin-bottom: 2rem; }
+        .table th { background-color: #e9ecef; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="container">
+            <h1><i class="bi bi-gear"></i> Manage Monitored Hosts</h1>
+            <p class="lead">Add, edit, or remove systems from monitoring</p>
+        </div>
+    </div>
+    <div class="container">
+        <div class="mb-3">
+            <a href="/" class="btn btn-secondary"><i class="bi bi-arrow-left"></i> Back to Dashboard</a>
+            <a href="/add" class="btn btn-success"><i class="bi bi-plus-circle"></i> Add New Host</a>
+        </div>
+        <div class="card">
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>IP</th>
+                                <th>Name</th>
+                                <th>Category</th>
+                                <th>Critical</th>
+                                <th>Enabled</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="hosts-list">
+                            <tr><td colspan="6" class="text-center">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        async function loadHosts() {
+            try {
+                const response = await fetch('/api/hosts');
+                const hosts = await response.json();
+                const tbody = document.getElementById('hosts-list');
+                tbody.innerHTML = '';
+                hosts.forEach(host => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td><code>${host.ip}</code></td>
+                        <td>${host.name}</td>
+                        <td>${host.category}</td>
+                        <td><span class="badge ${host.critical ? 'bg-danger' : 'bg-secondary'}">${host.critical ? 'Yes' : 'No'}</span></td>
+                        <td><span class="badge ${host.enabled ? 'bg-success' : 'bg-warning'}">${host.enabled ? 'Yes' : 'No'}</span></td>
+                        <td>
+                            <a href="/edit/${host.ip}" class="btn btn-sm btn-primary"><i class="bi bi-pencil"></i> Edit</a>
+                            <button class="btn btn-sm btn-danger" onclick="deleteHost('${host.ip}')"><i class="bi bi-trash"></i> Delete</button>
+                        </td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            } catch (error) {
+                console.error('Error loading hosts:', error);
+            }
+        }
+
+        async function deleteHost(ip) {
+            if (!confirm(`Are you sure you want to delete host ${ip}?`)) return;
+            try {
+                const response = await fetch(`/api/hosts/${ip}`, { method: 'DELETE' });
+                if (response.ok) {
+                    loadHosts();
+                } else {
+                    alert('Failed to delete host');
+                }
+            } catch (error) {
+                alert('Error: ' + error);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', loadHosts);
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

@@ -1,0 +1,287 @@
+#!/usr/bin/env python3
+"""
+Nakasero Hospital Infrastructure Dashboard - Phase 1
+Simple dashboard that reads from existing monitoring script
+"""
+
+import os
+import json
+import time
+from datetime import datetime
+from flask import Flask, render_template, jsonify
+import subprocess
+import threading
+from collections import defaultdict
+
+# ==============================================
+# CONFIGURATION - EXACT PATHS FOR YOUR SERVER
+# ==============================================
+
+app = Flask(__name__)
+
+# Your exact paths from the screenshot
+MONITOR_DIR = "/opt/hospital-monitor"
+STATE_FILE = os.path.join(MONITOR_DIR, "last_state.txt")
+LOG_FILE = os.path.join(MONITOR_DIR, "monitor.log")
+HISTORY_FILE = os.path.join(MONITOR_DIR, "history.log")
+
+# Dashboard paths
+BASE_DIR = "/opt/hospital-dashboard"
+DATA_DIR = os.path.join(BASE_DIR, "data")
+LOG_DIR = os.path.join(BASE_DIR, "logs")
+
+# ==============================================
+# HOST DEFINITIONS - YOUR INFRASTRUCTURE
+# ==============================================
+
+HOSTS = {
+    # Critical Infrastructure
+    "192.168.10.150": {"name": "EMC Storage", "category": "Storage", "critical": True},
+    "192.168.10.54": {"name": "ESXi Host 1", "category": "Virtualization", "critical": True},
+    "192.168.10.80": {"name": "ESXi Host 2", "category": "Virtualization", "critical": True},
+    "192.168.10.88": {"name": "vSphere", "category": "Virtualization", "critical": True},
+    "192.168.10.51": {"name": "Hyper-V Host 1", "category": "Virtualization", "critical": True},
+    "192.168.10.56": {"name": "Hyper-V Host 2", "category": "Virtualization", "critical": True},
+    
+    # Domain Controllers
+    "192.168.10.16": {"name": "Primary DC", "category": "Infrastructure", "critical": True},
+    "192.168.10.17": {"name": "Secondary DC", "category": "Infrastructure", "critical": True},
+    
+    # Backup Servers
+    "192.168.10.71": {"name": "Backup Server 1", "category": "Backup", "critical": True},
+    "10.4.3.88": {"name": "Backup Server 2", "category": "Backup", "critical": False},
+    "10.4.1.79": {"name": "Backup Server 3", "category": "Backup", "critical": False},
+    "192.168.10.84": {"name": "NEW LABGURU", "category": "Application", "critical": True},
+    
+    # ESXi Host 1 VMs
+    "192.168.10.78": {"name": "NHL-DYNAMICS365", "category": "Application", "critical": True},
+    "192.168.10.61": {"name": "NHL_HMIS_APP", "category": "Medical", "critical": True},
+    "192.168.10.60": {"name": "NHL_HMIS_DB", "category": "Medical", "critical": True},
+    "192.168.10.107": {"name": "PACS AIO", "category": "Medical", "critical": True},
+    "192.168.10.108": {"name": "RISINTPROD", "category": "Medical", "critical": True},
+    
+    # ESXi Host 2 VMs
+    "192.168.10.100": {"name": "NHL-HQ", "category": "Application", "critical": True},
+    "192.168.10.92": {"name": "NHL_CAFEAPP", "category": "Application", "critical": False},
+    "10.4.0.100": {"name": "WIFI Server", "category": "Infrastructure", "critical": False},
+    "192.168.10.104": {"name": "NHL-RIS-AIO", "category": "Medical", "critical": True},
+    "192.168.10.183": {"name": "PACS StorageVM", "category": "Medical", "critical": True},
+    "192.168.10.95": {"name": "NHLPACS3D", "category": "Medical", "critical": True},
+    
+    # Hyper-V Host 1 VMs
+    "192.168.10.82": {"name": "BOOKING MGMT", "category": "Application", "critical": True},
+    "192.168.10.64": {"name": "KRANIUM MGMT", "category": "Application", "critical": True},
+    "192.168.10.223": {"name": "ZABBIX Server", "category": "Monitoring", "critical": False},
+    "192.168.10.62": {"name": "HMIS DB Reports", "category": "Medical", "critical": True},
+    "192.168.10.25": {"name": "MED360", "category": "Medical", "critical": False},
+    "192.168.10.87": {"name": "QLIK", "category": "Application", "critical": False},
+    "192.168.10.58": {"name": "Resourceline", "category": "Application", "critical": False},
+    
+    # Hyper-V Host 2 VMs
+    "192.168.10.249": {"name": "DOC MGMT", "category": "Application", "critical": False},
+    "192.168.10.109": {"name": "FujiMonitoring", "category": "Medical", "critical": False},
+    "192.168.10.50": {"name": "IT Support VM", "category": "Infrastructure", "critical": False},
+    "192.168.10.177": {"name": "SMART-DB REPLICA", "category": "Application", "critical": False},
+    "192.168.10.63": {"name": "UAT APP DB", "category": "Application", "critical": False},
+    "192.168.10.90": {"name": "Phone Directory", "category": "Infrastructure", "critical": False},
+    "192.168.10.181": {"name": "SydneyVM", "category": "Medical", "critical": False},
+    
+    # This server
+    "192.168.10.177": {"name": "Dashboard Server", "category": "Monitoring", "critical": False},
+}
+
+# ==============================================
+# HELPER FUNCTIONS
+# ==============================================
+
+def read_state_file():
+    """Read status from last_state.txt"""
+    hosts_status = {}
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if ':' in line:
+                    ip, status = line.split(':', 1)
+                    hosts_status[ip.strip()] = status.strip()
+    return hosts_status
+
+def get_system_health():
+    """Get current system health metrics"""
+    try:
+        # CPU usage
+        cpu = subprocess.check_output(
+            "top -bn1 | grep 'Cpu(s)' | awk '{print $2}'", 
+            shell=True, text=True
+        ).strip()
+        
+        # Memory usage
+        mem = subprocess.check_output(
+            "free | grep Mem | awk '{print $3/$2 * 100.0}'", 
+            shell=True, text=True
+        ).strip()
+        
+        # Disk usage
+        disk = subprocess.check_output(
+            "df -h / | tail -1 | awk '{print $5}'", 
+            shell=True, text=True
+        ).strip().replace('%', '')
+        
+        return {
+            'cpu': float(cpu) if cpu.replace('.', '').isdigit() else 0,
+            'memory': float(mem) if mem.replace('.', '').isdigit() else 0,
+            'disk': float(disk) if disk.isdigit() else 0,
+            'server': subprocess.check_output(['hostname']).decode().strip(),
+            'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+    except Exception as e:
+        return {'error': str(e)}
+
+def get_recent_alerts():
+    """Get recent alerts from monitor.log"""
+    alerts = []
+    if os.path.exists(LOG_FILE):
+        try:
+            with open(LOG_FILE, 'r') as f:
+                lines = f.readlines()[-20:]  # Last 20 lines
+                
+            for line in lines:
+                if 'ALERT:' in line or 'RECOVERY:' in line or 'STATUS_CHANGE:' in line:
+                    # Extract timestamp [2024-01-15 10:30:00]
+                    parts = line.split(']')
+                    if len(parts) >= 2:
+                        timestamp = parts[0].replace('[', '')
+                        message = parts[1].strip()
+                        alerts.append({
+                            'time': timestamp,
+                            'message': message,
+                            'type': 'ALERT' if 'ALERT:' in line else 'RECOVERY' if 'RECOVERY:' in line else 'INFO'
+                        })
+        except Exception as e:
+            alerts.append({'error': str(e)})
+    
+    return alerts[-10:]  # Return last 10 alerts
+
+def get_all_hosts_status():
+    """Get complete status of all hosts"""
+    current_state = read_state_file()
+    
+    hosts_data = []
+    total = 0
+    up = 0
+    down = 0
+    
+    for ip, host_info in HOSTS.items():
+        total += 1
+        status = current_state.get(ip, 'unknown')
+        
+        if status == 'up':
+            up += 1
+        elif status == 'down':
+            down += 1
+        
+        hosts_data.append({
+            'ip': ip,
+            'name': host_info['name'],
+            'category': host_info['category'],
+            'critical': host_info['critical'],
+            'status': status,
+            'last_check': datetime.now().isoformat()
+        })
+    
+    # Sort by critical first, then status
+    hosts_data.sort(key=lambda x: (not x['critical'], x['status'] == 'down', x['name']))
+    
+    return {
+        'hosts': hosts_data,
+        'summary': {
+            'total': total,
+            'up': up,
+            'down': down,
+            'unknown': total - up - down,
+            'uptime_percentage': (up / total * 100) if total > 0 else 0
+        },
+        'last_updated': datetime.now().isoformat()
+    }
+
+# ==============================================
+# FLASK ROUTES
+# ==============================================
+
+@app.route('/')
+def index():
+    """Main dashboard page"""
+    return render_template('index.html')
+
+@app.route('/api/status')
+def api_status():
+    """API endpoint for dashboard status"""
+    data = get_all_hosts_status()
+    data['system_health'] = get_system_health()
+    data['recent_alerts'] = get_recent_alerts()
+    return jsonify(data)
+
+@app.route('/api/hosts')
+def api_hosts():
+    """API endpoint for all hosts"""
+    return jsonify(get_all_hosts_status())
+
+@app.route('/api/hosts/<ip>')
+def api_host_detail(ip):
+    """API endpoint for specific host"""
+    if ip in HOSTS:
+        host_data = HOSTS[ip].copy()
+        current_state = read_state_file()
+        host_data.update({
+            'ip': ip,
+            'status': current_state.get(ip, 'unknown'),
+            'last_check': datetime.now().isoformat()
+        })
+        return jsonify(host_data)
+    return jsonify({'error': 'Host not found'}), 404
+
+@app.route('/api/health')
+def api_health():
+    """API endpoint for system health"""
+    return jsonify(get_system_health())
+
+@app.route('/api/alerts')
+def api_alerts():
+    """API endpoint for alerts"""
+    return jsonify({'alerts': get_recent_alerts()})
+
+@app.route('/api/check/<ip>', methods=['POST'])
+def check_host(ip):
+    """Check a host immediately"""
+    try:
+        result = subprocess.run(
+            ['ping', '-c', '2', '-W', '2', ip],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        return jsonify({
+            'success': True,
+            'up': result.returncode == 0,
+            'output': result.stdout
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+# ==============================================
+# MAIN
+# ==============================================
+
+if __name__ == '__main__':
+    print("Starting Nakasero Hospital Dashboard...")
+    print(f"Reading from: {MONITOR_DIR}")
+    print(f"Total hosts configured: {len(HOSTS)}")
+    
+    app.run(
+        host='0.0.0.0',
+        port=5000,
+        debug=False,
+        threaded=True
+    )
+

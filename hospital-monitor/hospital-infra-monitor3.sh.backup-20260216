@@ -1,0 +1,312 @@
+#!/bin/bash
+
+# ==============================================
+# Hospital Infrastructure Monitoring Script
+# Author: IT Department - Nakasero Hospital
+# Description: Monitors ALL hosts from dashboard JSON
+# Version: 2.1 – fixed array handling
+# ==============================================
+
+# ----------------------------------------------------------------------
+# CONFIGURATION – EDIT YOUR EMAIL PASSWORD HERE
+# ----------------------------------------------------------------------
+
+SMTP_SERVER="smtppro.zoho.com"
+SMTP_PORT="465"
+EMAIL_FROM="isaac.nambafu@nakaserohospital.com"
+EMAIL_USER="isaac.nambafu@nakaserohospital.com"
+EMAIL_PASS="MAzdaxxxx5555"   # <--- UPDATE WITH YOUR ACTUAL PASSWORD
+
+RECIPIENTS=(
+    "isaacnbfu@gmail.com"
+    "gerald.balitwawula@nhl.co.ug"
+    "nhlitinternal@nakaserohospital.com"
+    "sydney.nahamya@nakaserohospital.com"
+)
+
+# ----------------------------------------------------------------------
+# PATHS
+# ----------------------------------------------------------------------
+MONITOR_DIR="/opt/hospital-monitor"
+LOG_FILE="$MONITOR_DIR/monitor.log"
+STATE_FILE="$MONITOR_DIR/last_state.txt"
+HISTORY_FILE="$MONITOR_DIR/history.log"
+RECENT_CHANGES="$MONITOR_DIR/recent_changes.tmp"
+DEBUG_LOG="$MONITOR_DIR/debug.log"
+CONFIG_FILE="/opt/hospital-dashboard/config/hosts.json"
+
+# ----------------------------------------------------------------------
+# COLORS (for console output – optional)
+# ----------------------------------------------------------------------
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+# ----------------------------------------------------------------------
+# CHECK DEPENDENCIES
+# ----------------------------------------------------------------------
+if ! command -v jq &> /dev/null; then
+    echo "ERROR: jq is not installed. Please run: sudo apt install jq"
+    exit 1
+fi
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "ERROR: Configuration file $CONFIG_FILE not found!"
+    exit 1
+fi
+
+# ----------------------------------------------------------------------
+# LOAD HOSTS FROM JSON (SINGLE SOURCE OF TRUTH)
+# ----------------------------------------------------------------------
+load_hosts_from_json() {
+    local hosts=()
+    while IFS= read -r line; do
+        name=$(echo "$line" | jq -r '.name')
+        ip=$(echo "$line" | jq -r '.ip')
+        enabled=$(echo "$line" | jq -r '.enabled // true')
+        if [ "$enabled" = "true" ]; then
+            hosts+=("$name:$ip")
+        fi
+    done < <(jq -c '.hosts[]' "$CONFIG_FILE")
+    printf '%s\n' "${hosts[@]}"   # each on its own line
+}
+
+# Use HOSTS from environment if provided (by wrapper), otherwise load from JSON
+if [ ${#HOSTS[@]} -gt 0 ]; then
+    # HOSTS is an array exported by wrapper (but bash can't export arrays – this branch may never trigger)
+    ALL_HOSTS=("${HOSTS[@]}")
+    echo "[$(date)] Using HOSTS from environment (wrapper): ${#ALL_HOSTS[@]} hosts" >> "$DEBUG_LOG"
+else
+    # Read from JSON directly – one line per host
+    mapfile -t ALL_HOSTS < <(load_hosts_from_json)
+    echo "[$(date)] Loaded ${#ALL_HOSTS[@]} hosts from JSON config" >> "$DEBUG_LOG"
+fi
+
+if [ ${#ALL_HOSTS[@]} -eq 0 ]; then
+    echo "ERROR: No hosts to monitor. Check $CONFIG_FILE" | tee -a "$DEBUG_LOG"
+    exit 1
+fi
+
+# ----------------------------------------------------------------------
+# LOGGING FUNCTIONS
+# ----------------------------------------------------------------------
+log_message() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+log_history() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$HISTORY_FILE"
+}
+
+# ----------------------------------------------------------------------
+# EMAIL FUNCTION (using mutt)
+# ----------------------------------------------------------------------
+send_email() {
+    local subject="$1"
+    local body="$2"
+    local to_emails=$(printf ",%s" "${RECIPIENTS[@]}")
+    to_emails=${to_emails:1}
+
+    if command -v mutt &> /dev/null; then
+        echo "$body" | mutt -e "set content_type=text/html" -s "$subject" "$to_emails"
+        if [ $? -eq 0 ]; then
+            log_message "Email sent: $subject"
+        else
+            log_message "FAILED to send email: $subject"
+        fi
+    else
+        log_message "ERROR: mutt not installed – cannot send email"
+    fi
+}
+
+# ----------------------------------------------------------------------
+# HOST CHECK FUNCTION (ping with retry)
+# ----------------------------------------------------------------------
+check_host() {
+    local ip="$1"
+    local retries=2
+    local timeout=2
+
+    for ((i=1; i<=retries; i++)); do
+        if ping -c 1 -W $timeout "$ip" > /dev/null 2>&1; then
+            echo "up"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "down"
+}
+
+# ----------------------------------------------------------------------
+# LOAD / SAVE STATE
+# ----------------------------------------------------------------------
+declare -A PREV_STATE
+load_previous_state() {
+    if [ -f "$STATE_FILE" ]; then
+        while IFS=':' read -r ip state; do
+            PREV_STATE["$ip"]="$state"
+        done < "$STATE_FILE"
+    fi
+}
+
+save_current_state() {
+    > "$STATE_FILE"
+    for ip in "${!PREV_STATE[@]}"; do
+        echo "$ip:${PREV_STATE[$ip]}" >> "$STATE_FILE"
+    done
+}
+
+# ----------------------------------------------------------------------
+# DISPLAY STATUS (console)
+# ----------------------------------------------------------------------
+show_status() {
+    clear
+    echo -e "${CYAN}===============================================${NC}"
+    echo -e "${CYAN}   HOSPITAL INFRASTRUCTURE MONITOR${NC}"
+    echo -e "${CYAN}   $(date '+%Y-%m-%d %H:%M:%S')${NC}"
+    echo -e "${CYAN}===============================================${NC}"
+    echo ""
+
+    local all_up=true
+    for host_entry in "${ALL_HOSTS[@]}"; do
+        local name="${host_entry%:*}"
+        local ip="${host_entry#*:}"
+        local status="${PREV_STATE[$ip]:-unknown}"
+
+        if [ "$status" = "up" ]; then
+            echo -e "  ${GREEN}✓ $name${NC}"
+            echo -e "     ${GREEN}$ip - ONLINE${NC}"
+        elif [ "$status" = "down" ]; then
+            echo -e "  ${RED}✗ $name${NC}"
+            echo -e "     ${RED}$ip - OFFLINE${NC}"
+            all_up=false
+        else
+            echo -e "  ${YELLOW}? $name${NC}"
+            echo -e "     ${YELLOW}$ip - UNKNOWN${NC}"
+        fi
+        echo ""
+    done
+
+    if [ "$all_up" = false ]; then
+        echo -e "\n${RED}⚠️  Some systems are offline!${NC}"
+    fi
+    echo -e "${CYAN}===============================================${NC}"
+}
+
+# ----------------------------------------------------------------------
+# SEND ALERT EMAIL (for down hosts)
+# ----------------------------------------------------------------------
+send_alert_email() {
+    local down_hosts_list="$1"
+    local subject="🚨 CRITICAL ALERT: Hospital Infrastructure Systems DOWN"
+    local body="<html><body><h2>🔴 CRITICAL SYSTEMS OFFLINE</h2><p>$(date)</p><ul>$down_hosts_list</ul></body></html>"
+    send_email "$subject" "$body"
+}
+
+# ----------------------------------------------------------------------
+# SEND RECOVERY EMAIL
+# ----------------------------------------------------------------------
+send_recovery_email() {
+    local recovered_hosts_list="$1"
+    local subject="✅ RECOVERY: Hospital Infrastructure Systems RESTORED"
+    local body="<html><body><h2>🟢 SYSTEMS RECOVERED</h2><p>$(date)</p><ul>$recovered_hosts_list</ul></body></html>"
+    send_email "$subject" "$body"
+}
+
+# ----------------------------------------------------------------------
+# MAIN MONITORING LOOP
+# ----------------------------------------------------------------------
+monitor_loop() {
+    declare -A CURRENT_STATE
+    declare -A ALERT_SENT
+    declare -A LAST_ALERT_TIME
+
+    # Initialize alert tracking
+    for host_entry in "${ALL_HOSTS[@]}"; do
+        local ip="${host_entry#*:}"
+        ALERT_SENT["$ip"]="false"
+        LAST_ALERT_TIME["$ip"]=0
+    done
+
+    while true; do
+        local down_hosts=()
+        local recovered_hosts=()
+        local down_html=""
+        local recovered_html=""
+        local current_time=$(date +%s)
+
+        # Check each host
+        for host_entry in "${ALL_HOSTS[@]}"; do
+            local name="${host_entry%:*}"
+            local ip="${host_entry#*:}"
+            local status=$(check_host "$ip")
+
+            CURRENT_STATE["$ip"]="$status"
+            local prev_status="${PREV_STATE[$ip]:-unknown}"
+
+            if [ "$status" != "$prev_status" ]; then
+                if [ "$status" = "down" ]; then
+                    down_hosts+=("$name ($ip)")
+                    down_html+="<li><strong>$name</strong> ($ip)</li>"
+                    ALERT_SENT["$ip"]="true"
+                    LAST_ALERT_TIME["$ip"]=$current_time
+                    log_message "ALERT: $name ($ip) went DOWN"
+                elif [ "$status" = "up" ] && [ "$prev_status" = "down" ]; then
+                    recovered_hosts+=("$name ($ip)")
+                    recovered_html+="<li><strong>$name</strong> ($ip)</li>"
+                    ALERT_SENT["$ip"]="false"
+                    log_message "RECOVERY: $name ($ip) is back UP"
+                fi
+            elif [ "$status" = "down" ] && [ "${ALERT_SENT[$ip]}" = "true" ]; then
+                # still down, check if we need a reminder (every 1 hour)
+                local time_since=$((current_time - LAST_ALERT_TIME[$ip]))
+                if [ $time_since -ge 3600 ]; then
+                    down_hosts+=("$name ($ip) - STILL DOWN")
+                    down_html+="<li><strong>$name ($ip)</strong> – still down after 1 hour</li>"
+                    LAST_ALERT_TIME["$ip"]=$current_time
+                    log_message "REMINDER: $name ($ip) still DOWN"
+                fi
+            fi
+
+            # Update previous state
+            PREV_STATE["$ip"]="$status"
+        done
+
+        # Display status on console
+        show_status
+
+        # Send alerts if needed
+        if [ ${#down_hosts[@]} -gt 0 ]; then
+            send_alert_email "$down_html"
+        fi
+        if [ ${#recovered_hosts[@]} -gt 0 ]; then
+            send_recovery_email "$recovered_html"
+        fi
+
+        # Save current state to file
+        save_current_state
+
+        # Wait 60 seconds
+        sleep 60
+    done
+}
+
+# ----------------------------------------------------------------------
+# TRAP CLEAN EXIT
+# ----------------------------------------------------------------------
+trap 'log_message "Monitoring stopped by user"; echo -e "\n${YELLOW}Stopped.${NC}"; exit 0' INT TERM
+
+# ----------------------------------------------------------------------
+# START MONITORING
+# ----------------------------------------------------------------------
+log_message "=========================================="
+log_message "Hospital Infrastructure Monitor starting"
+log_message "Monitoring ${#ALL_HOSTS[@]} hosts from JSON config"
+log_message "Config file: $CONFIG_FILE"
+log_message "=========================================="
+
+monitor_loop

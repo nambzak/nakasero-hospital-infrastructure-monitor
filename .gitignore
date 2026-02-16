@@ -1,0 +1,12 @@
+# Log files - don't upload these
+*.log
+*.tmp
+last_state.txt
+history.log
+recent_changes.tmp
+debug.log
+wrapper.log
+
+# Python cache
+__pycache__/
+*.pyc
