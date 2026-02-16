@@ -444,7 +444,7 @@ Open a Pull Request
 
 Development Setup
 # Clone your fork
-git clone git@github.com:your-username/nakasero-hospital-infrastructure-monitor.git
+git clone git@github.com:nambzak/nakasero-hospital-infrastructure-monitor.git
 cd nakasero-hospital-infrastructure-monitor
 
 # Set up development environment
